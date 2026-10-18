@@ -12,7 +12,7 @@ function setState(s, msg) {
   state = s;
   document.body.dataset.state = s;
   const defaults = {
-    idle: '"짱구야" 하고 불러주세요',
+    idle: wantMusic ? '음악 듣는 중 · 화면을 누르면 들을게요' : '"짱구야" 하고 불러주세요',
     command: '듣고 있어요…',
     thinking: '생각 중…',
     speaking: '',
@@ -52,9 +52,13 @@ function beep(freqs = [880, 1320]) {
 }
 
 // ─── 유튜브 플레이어 ───
+// 안드로이드 크롬은 음성인식이 (재)시작될 때마다 다른 소리를 일시정지시킨다.
+// 그래서 음악을 트는 동안(wantMusic)은 상시 음성인식을 끄고, 화면을 눌러야 듣는다.
 let player, playerReady = false;
 let queue = [], qi = 0;
 let volume = 70;
+let wantMusic = false;     // 사용자가 음악이 나오길 원하는 상태
+let resumeMusic = false;   // 명령을 듣느라 잠깐 멈춘 음악을 끝나고 다시 틀지
 
 window.onYouTubeIframeAPIReady = () => {
   player = new YT.Player('yt', {
@@ -63,6 +67,9 @@ window.onYouTubeIframeAPIReady = () => {
       onReady: () => { playerReady = true; player.setVolume(volume); },
       onStateChange: (e) => {
         if (e.data === YT.PlayerState.ENDED) playIndex(qi + 1);
+        // 플레이어 화면에서 직접 멈추거나 튼 경우
+        if (state === 'idle' && e.data === YT.PlayerState.PAUSED && wantMusic) { wantMusic = false; syncListening(); }
+        if (state === 'idle' && e.data === YT.PlayerState.PLAYING && !wantMusic) { wantMusic = true; syncListening(); }
         updatePlayerUi();
       },
       onError: () => playIndex(qi + 1),   // 퍼가기 금지 영상 등은 건너뜀
@@ -74,6 +81,7 @@ function playIndex(i) {
   if (!playerReady || !queue.length) return;
   if (i >= queue.length || i < 0) { stopPlayer(); return; }
   qi = i;
+  wantMusic = true;
   player.loadVideoById(queue[qi].videoId);
   player.setVolume(state === 'idle' ? volume : duckLevel());
   $('right').classList.remove('empty');
@@ -84,6 +92,8 @@ function playIndex(i) {
 function stopPlayer() {
   if (playerReady) player.stopVideo();
   queue = [];
+  wantMusic = false;
+  syncListening();
   $('right').classList.add('empty');
   document.body.classList.remove('playing');
   $('now').textContent = '';
@@ -111,15 +121,16 @@ function unduck() { if (playerReady && queue.length) player.setVolume(volume); }
 function control(action) {
   if (!playerReady) return;
   switch (action) {
-    case 'pause': player.pauseVideo(); break;
-    case 'resume': player.playVideo(); break;
-    case 'toggle': isPlaying() ? player.pauseVideo() : player.playVideo(); break;
+    case 'pause': wantMusic = false; player.pauseVideo(); break;
+    case 'resume': wantMusic = true; player.playVideo(); break;
+    case 'toggle': wantMusic = !wantMusic; wantMusic ? player.playVideo() : player.pauseVideo(); break;
     case 'stop': stopPlayer(); break;
     case 'next': playIndex(qi + 1); break;
     case 'previous': playIndex(qi - 1); break;
     case 'volume_up': volume = Math.min(100, volume + 15); player.setVolume(volume); break;
     case 'volume_down': volume = Math.max(5, volume - 15); player.setVolume(volume); break;
   }
+  syncListening();
 }
 
 document.querySelectorAll('#pbtns button').forEach((b) => b.addEventListener('click', () => control(b.dataset.act)));
@@ -225,18 +236,35 @@ function onFinal(text) {
 const clean = (s) => s.replace(/^[\s,.!?~]+|[\s,.!?~]+$/g, '');
 
 function listenForCommand() {
-  duck();
+  setState('command');
+  if (wantMusic && playerReady) {
+    // 음성인식이 어차피 음악을 멈추므로 미리 멈추고, 끝나면 다시 튼다
+    resumeMusic = true;
+    player.pauseVideo();
+  }
+  resumeRec();
   beep();
   $('you').textContent = '';
-  setState('command');
   clearTimeout(commandTimer);
   commandTimer = setTimeout(() => { if (state === 'command') backToIdle(); }, COMMAND_TIMEOUT);
 }
 
 function backToIdle() {
   unduck();
+  if (resumeMusic) {
+    resumeMusic = false;
+    if (wantMusic && playerReady && !isPlaying()) player.playVideo();
+  }
   setState('idle');
-  resumeRec();
+  syncListening();
+}
+
+// 대기 상태에서: 음악이 나오면 상시 음성인식을 끄고, 아니면 켠다
+function syncListening() {
+  if (state !== 'idle') return;
+  if (wantMusic) pauseRec();
+  else resumeRec();
+  setState('idle');
 }
 
 // ─── 질문 처리 ───
@@ -275,12 +303,11 @@ async function ask(text) {
 }
 
 // ─── 시작 ───
-$('mic').addEventListener('click', () => {
+// 마이크 버튼뿐 아니라 왼쪽 화면(시계·대화) 어디를 눌러도 듣기 시작
+$('left').addEventListener('click', (e) => {
+  if (e.target.closest('#typebox')) return;
   if (state === 'command') { backToIdle(); return; }
-  if (state === 'idle' || state === 'off') {
-    if (!wantRec) resumeRec();
-    listenForCommand();
-  }
+  if (state === 'idle' || state === 'off') listenForCommand();
 });
 
 $('typebox').addEventListener('submit', (e) => {
@@ -297,7 +324,7 @@ async function keepAwake() {
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state !== 'off') { keepAwake(); resumeRec(); }
+  if (document.visibilityState === 'visible' && state !== 'off') { keepAwake(); syncListening(); }
 });
 
 // ─── 설정 화면 ───
