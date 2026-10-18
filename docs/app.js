@@ -296,17 +296,16 @@ async function ask(text) {
   for (const c of controls) control(c.action);
 
   $('bot').textContent = out.reply || '';
-  if (out.reply) {
-    setState('speaking');
-    await speak(out.reply);
-  }
+  setState('speaking');
 
+  // 말하는 동안 영상을 미리 불러온다 (작은 소리로 시작 → 말이 끝나면 원래 소리)
   if (play) {
     queue = play.videos;
     qi = 0;
     volume = Math.max(volume, 30);
     playIndex(0);
   }
+  if (out.reply) await speak(out.reply);
   backToIdle();
 }
 
