@@ -92,6 +92,7 @@ function playIndex(i) {
   $('right').classList.remove('empty');
   document.body.classList.add('playing');
   $('now').textContent = `▶ ${queue[qi].title}`;
+  $('vol').textContent = `소리 ${volume}`;
 }
 
 function stopPlayer() {
@@ -123,8 +124,10 @@ const duckLevel = () => Math.min(volume, 12);
 function duck() { if (playerReady && queue.length) player.setVolume(duckLevel()); }
 function unduck() { if (playerReady && queue.length) player.setVolume(volume); }
 
-function control(action) {
+// amount: volume_up/down 은 변화량, set_volume 은 목표값 (0~100)
+function control(action, amount) {
   if (!playerReady) return;
+  const setVol = (v) => { volume = Math.max(5, Math.min(100, Math.round(v))); player.setVolume(volume); };
   switch (action) {
     case 'pause': wantMusic = false; player.pauseVideo(); break;
     case 'resume': wantMusic = true; player.playVideo(); break;
@@ -132,10 +135,29 @@ function control(action) {
     case 'stop': stopPlayer(); break;
     case 'next': playIndex(qi + 1); break;
     case 'previous': playIndex(qi - 1); break;
-    case 'volume_up': volume = Math.min(100, volume + 15); player.setVolume(volume); break;
-    case 'volume_down': volume = Math.max(5, volume - 15); player.setVolume(volume); break;
+    case 'volume_up': setVol(volume + (amount || 15)); break;
+    case 'volume_down': setVol(volume - (amount || 15)); break;
+    case 'set_volume': if (amount != null) setVol(amount); break;
   }
+  if (action.startsWith('volume') || action === 'set_volume') $('vol').textContent = `소리 ${volume}`;
   syncListening();
+}
+
+// 자주 쓰는 짧은 명령은 Gemini 를 거치지 않고 바로 처리한다
+function quickCommand(text) {
+  const s = text.replace(/[\s,.!?~]/g, '');
+  if (s.length > 16) return null;
+  const amount = /조금|살짝|약간|쪼금|쪼끔|조끔/.test(s) ? 8 : /많이|확|훨씬|팍/.test(s) ? 30 : 15;
+  const num = s.match(/(\d{1,3})/);
+  if (/소리|볼륨|음량/.test(s) && num) return { action: 'set_volume', amount: Number(num[1]) };
+  if (/(소리|볼륨|음량).*(키워|키어|높여|올려|크게|업)|^(더)?크게(해|해줘)?$/.test(s)) return { action: 'volume_up', amount };
+  if (/(소리|볼륨|음량).*(줄여|낮춰|내려|작게|다운)|^(더)?작게(해|해줘)?$/.test(s)) return { action: 'volume_down', amount };
+  if (/^다음(곡|노래|거|꺼|영상)?(으로)?(틀어|넘겨)?(줘)?$|^(넘겨|스킵)(줘)?$/.test(s)) return { action: 'next' };
+  if (/^(이전|앞)(곡|노래|거|꺼|영상)?(으로)?(틀어)?(줘)?$/.test(s)) return { action: 'previous' };
+  if (/^(잠깐|잠시)?(멈춰|정지|일시정지|스톱)(봐|줘|해|해줘)?$/.test(s)) return { action: 'pause' };
+  if (/^(노래|음악|영상)?(꺼|꺼줘|그만|그만틀어|그만해|끄기)(줘)?$/.test(s)) return { action: 'stop' };
+  if (/^(다시|계속)(틀어|재생|켜)(줘|해|해줘)?$/.test(s)) return { action: 'resume' };
+  return null;
 }
 
 document.querySelectorAll('#pbtns button').forEach((b) => b.addEventListener('click', () => control(b.dataset.act)));
@@ -278,6 +300,27 @@ function syncListening() {
 // ─── 질문 처리 ───
 async function ask(text) {
   clearTimeout(commandTimer);
+
+  const quick = queue.length ? quickCommand(text) : null;
+  if (quick) {
+    const before = volume;
+    control(quick.action, quick.amount);
+    $('you').textContent = text;
+    const atLimit = quick.action.startsWith('volume') && volume === before;
+    $('bot').textContent = atLimit
+      ? (volume >= 100 ? '이미 가장 커요. 태블릿 옆 볼륨 버튼으로 더 키워 주세요.' : '이미 가장 작아요.')
+      : (quick.action.startsWith('volume') || quick.action === 'set_volume' ? `소리 ${volume}` : '네');
+    if (atLimit) {
+      pauseRec();
+      setState('speaking');
+      await speak($('bot').textContent);
+    } else {
+      beep([1320]);
+    }
+    backToIdle();
+    return;
+  }
+
   pauseRec();
   duck();
   $('you').textContent = text;
@@ -293,7 +336,7 @@ async function ask(text) {
   // 정지·일시정지는 말하기 전에 바로 실행
   const controls = (out.actions || []).filter((a) => a.type === 'control');
   const play = (out.actions || []).find((a) => a.type === 'play');
-  for (const c of controls) control(c.action);
+  for (const c of controls) control(c.action, c.amount);
 
   $('bot').textContent = out.reply || '';
   setState('speaking');

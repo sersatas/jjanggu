@@ -162,8 +162,12 @@ const TOOLS = [{
         properties: {
           action: {
             type: 'string',
-            enum: ['pause', 'resume', 'stop', 'next', 'previous', 'volume_up', 'volume_down'],
-            description: 'pause=일시정지 ("멈춰", "잠깐"), resume=다시 재생, stop=완전히 끄기 ("꺼", "그만 틀어"), next=다음 곡, previous=이전 곡, volume_up/down=소리 크게/작게',
+            enum: ['pause', 'resume', 'stop', 'next', 'previous', 'volume_up', 'volume_down', 'set_volume'],
+            description: 'pause=일시정지 ("멈춰", "잠깐"), resume=다시 재생, stop=완전히 끄기 ("꺼", "그만 틀어"), next=다음 곡, previous=이전 곡, volume_up/down=소리 크게/작게, set_volume=소리를 특정 값으로',
+          },
+          amount: {
+            type: 'number',
+            description: 'volume_up/down: 바꿀 양 (조금=8, 보통=15, 많이=30). set_volume: 목표 소리 0~100 (절반=50, 최대=100).',
           },
         },
         required: ['action'],
@@ -319,7 +323,7 @@ async function chat({ text, history = [], nowPlaying }) {
 
       // 플레이어 제어만 있으면 결과를 다시 물을 필요 없이 바로 끝낸다
       if (calls.every((p) => p.functionCall.name === 'control_player')) {
-        for (const p of calls) actions.push({ type: 'control', action: p.functionCall.args.action });
+        for (const p of calls) actions.push({ type: 'control', action: p.functionCall.args.action, amount: p.functionCall.args.amount });
         return { reply: said, actions };
       }
 
@@ -336,7 +340,7 @@ async function chat({ text, history = [], nowPlaying }) {
               ? { playing: videos[0].title, channel: videos[0].channel, queued: videos.length }
               : { error: '검색 결과가 없어요' };
           } else if (fc.name === 'control_player') {
-            actions.push({ type: 'control', action: fc.args.action });
+            actions.push({ type: 'control', action: fc.args.action, amount: fc.args.amount });
             result = { ok: true };
           } else {
             result = { error: `알 수 없는 도구 ${fc.name}` };
