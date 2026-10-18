@@ -1,7 +1,8 @@
 {
   "name": "짱구",
   "short_name": "짱구",
-  "start_url": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "fullscreen",
   "orientation": "any",
   "background_color": "#101418",
