@@ -1,0 +1,94 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #101418;
+  --panel: #1a2027;
+  --text: #f2f4f6;
+  --muted: #8b95a1;
+  --accent: #ffcc33;   /* 짱구 노랑 */
+  --red: #ff5a4e;      /* 짱구 빨강 */
+  --blue: #4da3ff;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--text); overflow: hidden; }
+body { font-family: -apple-system, 'Noto Sans KR', 'Malgun Gothic', sans-serif; -webkit-tap-highlight-color: transparent; user-select: none; }
+
+/* 시작 화면 */
+.overlay {
+  position: fixed; inset: 0; z-index: 10; background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  cursor: pointer; text-align: center; padding: 24px;
+}
+.overlay.hidden { display: none; }
+.start-face { font-size: 88px; }
+.overlay h1 { font-size: 48px; color: var(--accent); }
+.overlay p { font-size: 20px; color: var(--text); }
+.overlay .sub { font-size: 16px; color: var(--muted); }
+
+/* 설정 */
+#settings { z-index: 20; cursor: default; overflow-y: auto; justify-content: flex-start; padding-top: 6vh; }
+#settings-form { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 14px; text-align: left; }
+#settings-form h2 { font-size: 28px; color: var(--accent); }
+#settings-form label { display: flex; flex-direction: column; gap: 6px; font-size: 15px; color: var(--muted); flex: 1; min-width: 0; }
+#settings-form input { background: var(--panel); border: 1px solid #2a323b; color: var(--text); font-size: 17px; padding: 12px 14px; border-radius: 12px; outline: none; width: 100%; user-select: text; }
+#settings-form input:focus { border-color: var(--muted); }
+#settings-form .row { display: flex; gap: 10px; }
+#settings-form .buttons { justify-content: flex-end; margin-top: 6px; }
+#settings-form button { height: 50px; padding: 0 26px; font-size: 17px; border: none; border-radius: 12px; background: var(--panel); color: var(--text); cursor: pointer; }
+#settings-form button.primary { background: var(--accent); color: #222; font-weight: 700; }
+
+#gear { position: fixed; top: 14px; right: 14px; z-index: 5; width: 44px; height: 44px; border: none; border-radius: 50%; background: transparent; color: #4a535d; font-size: 24px; cursor: pointer; }
+#gear:active { color: var(--text); }
+
+/* 레이아웃: 가로 화면이면 좌우, 세로면 위아래 */
+#app { display: flex; height: 100%; gap: 24px; padding: 24px; }
+#left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#right { flex: 1.3; display: flex; flex-direction: column; gap: 12px; min-width: 0; justify-content: center; }
+#right.empty { display: none; }
+@media (orientation: portrait) {
+  #app { flex-direction: column-reverse; }
+  #right { flex: 0 0 auto; }
+}
+
+#clock { margin-bottom: 16px; }
+#time { font-size: clamp(56px, 11vw, 120px); font-weight: 700; letter-spacing: -2px; line-height: 1; font-variant-numeric: tabular-nums; }
+#date { font-size: clamp(16px, 2.4vw, 24px); color: var(--muted); margin-top: 8px; }
+body.playing #time { font-size: clamp(44px, 7vw, 80px); }
+
+#talk { flex: 1; display: flex; flex-direction: column; gap: 10px; justify-content: flex-end; overflow: hidden; padding-bottom: 12px; }
+.bubble { font-size: clamp(18px, 2.6vw, 26px); line-height: 1.45; padding: 14px 18px; border-radius: 18px; max-width: 100%; word-break: keep-all; }
+.bubble:empty { display: none; }
+.you { align-self: flex-end; background: #2a3440; color: #cfd6de; }
+.bot { align-self: flex-start; background: var(--panel); border: 1px solid #2a323b; }
+
+#controls { display: flex; align-items: center; gap: 18px; }
+#mic {
+  flex: 0 0 auto; width: 84px; height: 84px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--panel); border: 3px solid #2f3842; display: flex; align-items: center; justify-content: center;
+  transition: background .2s, border-color .2s, transform .1s;
+}
+#mic:active { transform: scale(.95); }
+#mic svg { width: 38px; height: 38px; fill: var(--muted); transition: fill .2s; }
+#status { font-size: clamp(16px, 2.2vw, 22px); color: var(--muted); }
+
+body[data-state="idle"] #mic { border-color: #3a4652; }
+body[data-state="command"] #mic { background: var(--red); border-color: var(--red); animation: pulse 1s infinite; }
+body[data-state="command"] #mic svg { fill: #fff; }
+body[data-state="thinking"] #mic { background: var(--accent); border-color: var(--accent); animation: pulse .7s infinite; }
+body[data-state="thinking"] #mic svg { fill: #222; }
+body[data-state="speaking"] #mic { border-color: var(--blue); }
+body[data-state="speaking"] #mic svg { fill: var(--blue); }
+body[data-state="off"] #mic svg { fill: #4a535d; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 14px rgba(255, 204, 51, .15); } }
+
+#typebox { margin-top: 14px; }
+#typein { width: 100%; background: transparent; border: 1px solid #2a323b; color: var(--text); font-size: 16px; padding: 10px 14px; border-radius: 12px; outline: none; }
+#typein:focus { border-color: var(--muted); }
+
+/* 플레이어 */
+#player-wrap { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 16px; overflow: hidden; }
+#player-wrap iframe, #yt { width: 100%; height: 100%; border: 0; }
+#now { font-size: clamp(16px, 2.2vw, 22px); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#pbtns { display: flex; gap: 10px; }
+#pbtns button { flex: 1; height: 52px; font-size: 22px; border: none; border-radius: 14px; background: var(--panel); color: var(--text); cursor: pointer; }
+#pbtns button:active { background: #2a3440; }

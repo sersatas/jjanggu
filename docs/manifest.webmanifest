@@ -1,0 +1,9 @@
+{
+  "name": "짱구",
+  "short_name": "짱구",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#101418",
+  "theme_color": "#101418"
+}
