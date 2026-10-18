@@ -315,7 +315,7 @@ $('settings-form').addEventListener('submit', (e) => {
   saveSettings({
     geminiKey: v('geminiKey'),
     youtubeKey: v('youtubeKey'),
-    model: v('model') || DEFAULTS.model,
+    model: v('model'),
     homeName: v('homeName') || DEFAULTS.homeName,
     homeLat: Number(v('homeLat')) || DEFAULTS.homeLat,
     homeLon: Number(v('homeLon')) || DEFAULTS.homeLon,
@@ -326,6 +326,8 @@ $('settings-form').addEventListener('submit', (e) => {
 $('start').addEventListener('click', () => {
   $('start').classList.add('hidden');
   if (!loadSettings().geminiKey) openSettings();
+  refreshHomeWeather();
+  setInterval(refreshHomeWeather, HOME_WEATHER_TTL);
   // 사용자 터치 안에서 오디오·TTS 잠금 해제
   audioCtx ||= new AudioContext();
   audioCtx.resume();

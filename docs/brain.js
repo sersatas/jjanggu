@@ -5,15 +5,18 @@ const SETTINGS_KEY = 'jjanggu.settings';
 const DEFAULTS = {
   geminiKey: '',
   youtubeKey: '',
-  model: 'gemini-3.5-flash-lite',
+  model: '',   // 비워 두면 MODELS 를 자동으로 사용
   homeName: '서울',
   homeLat: 37.5665,
   homeLon: 126.978,
 };
 
 function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
-  catch { return { ...DEFAULTS }; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    if (saved.model === 'gemini-3.5-flash-lite') saved.model = '';   // 예전 기본값은 자동으로 전환
+    return { ...DEFAULTS, ...saved };
+  } catch { return { ...DEFAULTS }; }
 }
 function saveSettings(s) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch {}
@@ -82,6 +85,27 @@ async function getWeather({ place, latitude, longitude } = {}, s) {
   };
 }
 
+// 집 날씨는 미리 받아 두고 시스템 프롬프트에 넣는다 → 날씨 질문을 Gemini 한 번 호출로 끝냄
+const HOME_WEATHER_TTL = 20 * 60 * 1000;
+let homeWeather = null, homeWeatherAt = 0, homeWeatherLoading = null;
+
+function refreshHomeWeather() {
+  const s = loadSettings();
+  homeWeatherLoading ||= getWeather({}, s)
+    .then((w) => { homeWeather = w; homeWeatherAt = Date.now(); })
+    .catch((e) => console.warn('집 날씨 갱신 실패', e))
+    .finally(() => { homeWeatherLoading = null; });
+  return homeWeatherLoading;
+}
+
+async function freshHomeWeather() {
+  if (Date.now() - homeWeatherAt > HOME_WEATHER_TTL) {
+    // 오래됐으면 갱신을 기다리되, 2초 넘게 걸리면 있는 걸로 답한다
+    await Promise.race([refreshHomeWeather(), new Promise((r) => setTimeout(r, 2000))]);
+  }
+  return homeWeather;
+}
+
 // ─── 유튜브 검색 ───
 function decodeHtml(s) {
   const t = document.createElement('textarea');
@@ -148,7 +172,7 @@ const TOOLS = [{
   ],
 }];
 
-function systemPrompt(s, nowPlaying) {
+function systemPrompt(s, nowPlaying, home) {
   const now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'full', timeStyle: 'short' });
   return [
     '너는 집 거실 태블릿에 사는 음성 비서 "짱구"야. 사용자가 말로 묻고, 너의 대답은 소리 내어 읽힌다.',
@@ -157,51 +181,100 @@ function systemPrompt(s, nowPlaying) {
     '- 음성 인식 결과라 오타나 비슷한 발음이 섞여 있을 수 있어. 문맥으로 의도를 추측해서 처리하고, 정말 모르겠을 때만 되물어.',
     '- 노래·음악·영상을 틀어달라는 말이면 반드시 play_youtube 를 호출해야 실제로 재생된다. 호출하지 않고 "틀어드릴게요" 라고만 말하면 안 된다. 재생할 땐 "○○ 틀어드릴게요" 정도로 아주 짧게 말해.',
     '- 멈춰/꺼/다음 곡/소리 줄여 같은 말은 control_player 를 쓴다. 이때 대답은 "네" 정도로 아주 짧게, 혹은 비워도 된다.',
-    '- 날씨·우산·옷차림·미세먼지 질문은 get_weather 결과로 답한다. 묻는 것에 맞춰 핵심만 말해.',
+    home
+      ? `- 날씨·우산·옷차림·미세먼지 질문: 지역을 말하지 않았거나 ${s.homeName}이면 아래 "집 날씨" 데이터로 바로 답하고 get_weather 는 부르지 마. 다른 지역일 때만 get_weather 를 쓴다. 묻는 것에 맞춰 핵심만 말해.`
+      : '- 날씨·우산·옷차림·미세먼지 질문은 get_weather 결과로 답한다. 묻는 것에 맞춰 핵심만 말해.',
     '- 그 밖의 상식·지식 질문은 네 지식으로 간단히 답해. 날짜·숫자처럼 정확해야 하는데 확실하지 않으면 그렇다고 말해.',
     `- 집 위치: ${s.homeName}. 현재 시각: ${now}.`,
     nowPlaying ? `- 지금 재생 중: "${nowPlaying.title}" (${nowPlaying.state})` : '- 지금 재생 중인 영상 없음.',
+    ...(home ? ['', `집 날씨 (${s.homeName}):`, JSON.stringify({ now: home.now, next24h: home.next24h, daily: home.daily.slice(0, 5) })] : []),
   ].join('\n');
 }
 
 class QuotaError extends Error {}
 
-// 기본 모델이 바쁘거나(503) 느리거나 한도(429)에 걸리면 다음 모델로 넘어간다. 무료 한도는 모델별로 따로다.
-const FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash'];
-const GEMINI_TIMEOUT = 10000;
+// 모델마다 붐비는 정도가 수시로 바뀐다. 첫 모델이 HEDGE_DELAY 안에 답하지 않으면 다음 모델에도
+// 동시에 물어보고 먼저 온 답을 쓴다. 무료 한도도 모델별로 따로라 한도 초과 때도 다음 모델로 간다.
+// 순서 = 하루 무료 한도가 넉넉한 것부터 (gemini-3.6-flash 는 하루 20회뿐이라 마지막)
+const MODELS = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.6-flash'];
+const HEDGE_DELAY = 2500;
+const GEMINI_TIMEOUT = 15000;
+const QUOTA_SKIP = 10 * 60 * 1000;
+const quotaHitAt = {};   // 한도에 걸린 모델은 잠시 건너뛴다
 
-async function geminiOnce(model, body, s) {
+const isRetryable = (e) => e instanceof QuotaError || e.retryable || e.name === 'TimeoutError';
+
+async function geminiOnce(model, body, s, signal) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  const res = await fetch(url, {
+  const send = (level) => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': s.geminiKey },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(GEMINI_TIMEOUT),
+    body: JSON.stringify({ ...body, generationConfig: { thinkingConfig: { thinkingLevel: level } } }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(GEMINI_TIMEOUT)]),
   });
-  const data = await res.json();
-  if (res.status === 429) throw new QuotaError(data.error?.message || 'quota');
+  let res = await send('minimal');
+  let data = await res.json();
+  if (res.status === 400 && /thinking level/i.test(data.error?.message)) {
+    res = await send('low');
+    data = await res.json();
+  }
+  if (res.status === 429) {
+    quotaHitAt[model] = Date.now();
+    throw new QuotaError(data.error?.message || 'quota');
+  }
   if (!res.ok) {
     const err = new Error(data.error?.message || `Gemini ${res.status}`);
     err.retryable = res.status >= 500;
     throw err;
   }
+  data.model = model;
   return data;
 }
 
-async function gemini(body, s) {
-  const models = [...new Set([s.model, ...FALLBACK_MODELS])];
-  let lastErr;
-  for (const model of models) {
-    try {
-      return await geminiOnce(model, body, s);
-    } catch (e) {
-      lastErr = e;
-      const retryable = e instanceof QuotaError || e.retryable || e.name === 'TimeoutError';
-      console.warn(`⚠ ${model}: ${e.message}`);
-      if (!retryable) throw e;
-    }
-  }
-  throw lastErr;
+// pinned: 같은 질문의 두 번째 호출(도구 결과 전달)은 첫 답을 준 모델로 보낸다 (생각 서명이 모델마다 달라서)
+function gemini(body, s, pinned) {
+  let models = pinned ? [pinned] : [...new Set([s.model, ...MODELS].filter(Boolean))];
+  const available = models.filter((m) => !(Date.now() - (quotaHitAt[m] || 0) < QUOTA_SKIP));
+  if (available.length) models = available;
+  return new Promise((resolve, reject) => {
+    let next = 0, running = 0, done = false, lastErr, timer;
+    const controllers = [];
+
+    const finish = (fn, v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      controllers.forEach((c) => c.abort());
+      fn(v);
+    };
+
+    const launch = () => {
+      if (done || next >= models.length) return;
+      const model = models[next++];
+      const ctrl = new AbortController();
+      controllers.push(ctrl);
+      running++;
+      const t0 = performance.now();
+      geminiOnce(model, body, s, ctrl.signal).then(
+        (data) => {
+          console.log(`✓ ${model} ${Math.round(performance.now() - t0)}ms`);
+          finish(resolve, data);
+        },
+        (e) => {
+          running--;
+          if (done) return;
+          lastErr = e;
+          console.warn(`⚠ ${model}: ${e.message}`);
+          if (!isRetryable(e)) return finish(reject, e);
+          if (next < models.length) { clearTimeout(timer); launch(); }
+          else if (!running) finish(reject, lastErr);
+        },
+      );
+      clearTimeout(timer);
+      timer = setTimeout(launch, HEDGE_DELAY);
+    };
+    launch();
+  });
 }
 
 // 반환: { reply, actions: [{type:'play', videos}, {type:'control', action}] }
@@ -213,18 +286,20 @@ async function chat({ text, history = [], nowPlaying }) {
   contents.push({ role: 'user', parts: [{ text }] });
   const actions = [];
   let forcePlay = false;
+  let pinned = null;
 
   try {
+    const home = await freshHomeWeather();
     for (let turn = 0; turn < 4; turn++) {
       const data = await gemini({
-        systemInstruction: { parts: [{ text: systemPrompt(s, nowPlaying) }] },
+        systemInstruction: { parts: [{ text: systemPrompt(s, nowPlaying, home) }] },
         contents,
         tools: TOOLS,
         ...(forcePlay && turn === 0
           ? { toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['play_youtube'] } } }
           : {}),
-        generationConfig: { thinkingConfig: { thinkingLevel: 'low' } },
-      }, s);
+      }, s, pinned);
+      if (turn === 0) pinned = data.model;
       const content = data.candidates?.[0]?.content;
       if (!content?.parts) return { reply: '음, 잘 모르겠어요. 다시 말해 주실래요?', actions };
       contents.push(content); // thoughtSignature 보존을 위해 그대로 되돌려 보냄
@@ -236,6 +311,7 @@ async function chat({ text, history = [], nowPlaying }) {
       if (!calls.length && turn === 0 && !forcePlay && /틀어|재생|들려/.test(text) && /틀어|재생|들려/.test(said)) {
         contents.pop();
         forcePlay = true;
+        pinned = null;
         turn--;
         continue;
       }
