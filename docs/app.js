@@ -59,6 +59,7 @@ let queue = [], qi = 0;
 let volume = 70;
 let wantMusic = false;     // 사용자가 음악이 나오길 원하는 상태
 let resumeMusic = false;   // 명령을 듣느라 잠깐 멈춘 음악을 끝나고 다시 틀지
+let ignorePauseUntil = 0;  // 곡을 바꿀 때 잠깐 오는 PAUSED 는 사용자가 멈춘 게 아니다
 
 window.onYouTubeIframeAPIReady = () => {
   player = new YT.Player('yt', {
@@ -68,7 +69,10 @@ window.onYouTubeIframeAPIReady = () => {
       onStateChange: (e) => {
         if (e.data === YT.PlayerState.ENDED) playIndex(qi + 1);
         // 플레이어 화면에서 직접 멈추거나 튼 경우
-        if (state === 'idle' && e.data === YT.PlayerState.PAUSED && wantMusic) { wantMusic = false; syncListening(); }
+        if (state === 'idle' && e.data === YT.PlayerState.PAUSED && wantMusic && Date.now() > ignorePauseUntil) {
+          wantMusic = false;
+          syncListening();
+        }
         if (state === 'idle' && e.data === YT.PlayerState.PLAYING && !wantMusic) { wantMusic = true; syncListening(); }
         updatePlayerUi();
       },
@@ -82,6 +86,7 @@ function playIndex(i) {
   if (i >= queue.length || i < 0) { stopPlayer(); return; }
   qi = i;
   wantMusic = true;
+  ignorePauseUntil = Date.now() + 3000;
   player.loadVideoById(queue[qi].videoId);
   player.setVolume(state === 'idle' ? volume : duckLevel());
   $('right').classList.remove('empty');
@@ -253,7 +258,10 @@ function backToIdle() {
   unduck();
   if (resumeMusic) {
     resumeMusic = false;
-    if (wantMusic && playerReady && !isPlaying()) player.playVideo();
+    if (wantMusic && playerReady && !isPlaying()) {
+      ignorePauseUntil = Date.now() + 3000;
+      player.playVideo();
+    }
   }
   setState('idle');
   syncListening();
